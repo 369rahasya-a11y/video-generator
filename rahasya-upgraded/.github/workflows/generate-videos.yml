@@ -1,0 +1,141 @@
+name: Generate Rahasya Videos
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Triggers
+# ─────────────────────────────────────────────────────────────────────────────
+on:
+  schedule:
+    - cron: "0 3 * * *"   # 03:00 UTC daily (after horoscope-generator)
+
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Max videos to generate (empty = all pending)"
+        required: false
+        default: ""
+        type: string
+      sign:
+        description: "Filter by zodiac sign (e.g. aries, cancer). Empty = all."
+        required: false
+        default: ""
+        type: string
+      mood:
+        description: "Filter by mood (e.g. peaceful, ambitious). Empty = all."
+        required: false
+        default: ""
+        type: string
+      force:
+        description: "Re-process rows that already have a social_videos entry"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Concurrency guard — prevents two runs processing the same rows simultaneously
+# ─────────────────────────────────────────────────────────────────────────────
+concurrency:
+  group: rahasya-video-generation
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    name: Generate Videos
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # ── Checkout ────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Node.js ─────────────────────────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # ── System dependencies ─────────────────────────────────────────────────
+      # FFmpeg:              video encoding + background PNG generation
+      # fonts-dejavu-core:  Unicode-complete fonts for FFmpeg drawtext
+      #                     (provides DejaVuSans.ttf and DejaVuSans-Bold.ttf)
+      # fonts-freefont-ttf: fallback font family
+      - name: Install FFmpeg and system fonts
+        run: |
+          sudo apt-get update -y -q
+          sudo apt-get install -y -q ffmpeg fonts-dejavu-core fonts-freefont-ttf
+          echo "--- FFmpeg version ---"
+          ffmpeg -version | head -3
+          echo "--- DejaVu fonts ---"
+          fc-list | grep -i dejavu | sort
+
+      # ── Node dependencies ────────────────────────────────────────────────────
+      - name: Install Node dependencies
+        run: npm ci --no-audit --no-fund
+
+      # ── Optional: download production assets ─────────────────────────────────
+      # Uncomment and adapt to download music tracks from your storage.
+      # The zodiac wheel (assets/wheel/zodiac-wheel.png) is committed to the repo.
+      #
+      # Example — download from S3:
+      #   - name: Download ambient music
+      #     env:
+      #       AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     run: |
+      #       mkdir -p assets/music
+      #       aws s3 sync s3://your-bucket/rahasya/music/ assets/music/
+      #
+      # Example — download from GitHub releases:
+      #   - name: Download ambient music
+      #     run: |
+      #       mkdir -p assets/music
+      #       curl -L https://github.com/your-org/rahasya-assets/releases/download/v1/ambient01.mp3 \
+      #         -o assets/music/ambient01.mp3
+      #
+      # Without this step the engine uses a synthesised cosmic ambient drone —
+      # the pipeline continues to work and produce complete videos.
+
+      # ── TypeScript type check ─────────────────────────────────────────────────
+      - name: Type check
+        run: npm run typecheck
+
+      # ── Verify zodiac wheel asset ─────────────────────────────────────────────
+      - name: Verify assets
+        run: |
+          echo "Checking zodiac wheel…"
+          ls -lh assets/wheel/zodiac-wheel.png
+          echo "Checking music directory…"
+          ls -lh assets/music/ || echo "(no music files — will use synthesised audio)"
+
+      # ── Generate videos ───────────────────────────────────────────────────────
+      - name: Generate videos
+        env:
+          SUPABASE_URL:             ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_VIDEO_BUCKET:    ${{ vars.SUPABASE_VIDEO_BUCKET || 'social-videos' }}
+          BRAND_NAME:               ${{ vars.BRAND_NAME || 'Discover Rahasya' }}
+          BRAND_URL:                ${{ vars.BRAND_URL || 'discover-rahasya.vercel.app' }}
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit=${{ inputs.limit }}"; fi
+          if [ -n "${{ inputs.sign }}"  ]; then ARGS="$ARGS --sign=${{ inputs.sign }}";   fi
+          if [ -n "${{ inputs.mood }}"  ]; then ARGS="$ARGS --mood=${{ inputs.mood }}";   fi
+          if [ "${{ inputs.force }}" = "true" ]; then ARGS="$ARGS --force"; fi
+
+          echo "Running: npm run generate -- $ARGS"
+          npm run generate -- $ARGS
+
+      # ── Upload debug artifacts on failure ─────────────────────────────────────
+      - name: Upload debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-render-debug
+          path: |
+            tmp/
+            output/
+          retention-days: 3
