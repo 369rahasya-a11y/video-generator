@@ -24,6 +24,11 @@ on:
         required: false
         default: ""
         type: string
+      date:
+        description: "Generate videos for a specific date (YYYY-MM-DD). Leave empty for all pending."
+        required: false
+        default: ""
+        type: string
       force:
         description: "Re-process rows that already have a social_videos entry"
         required: false
@@ -124,6 +129,7 @@ jobs:
           if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit=${{ inputs.limit }}"; fi
           if [ -n "${{ inputs.sign }}"  ]; then ARGS="$ARGS --sign=${{ inputs.sign }}";   fi
           if [ -n "${{ inputs.mood }}"  ]; then ARGS="$ARGS --mood=${{ inputs.mood }}";   fi
+          if [ -n "${{ inputs.date }}" ]; then ARGS="$ARGS --date=${{ inputs.date }}"; fi
           if [ "${{ inputs.force }}" = "true" ]; then ARGS="$ARGS --force"; fi
 
           echo "Running: npm run generate -- $ARGS"
