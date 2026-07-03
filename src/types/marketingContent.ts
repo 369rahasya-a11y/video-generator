@@ -20,6 +20,7 @@ export interface MarketingContentRow {
 export interface MarketingContentFilter {
   sign?: string;
   mood?: string;
+  date?: string;
   limit?: number;
   /** When false (default), rows that already have a social_videos entry are skipped. */
   force?: boolean;
