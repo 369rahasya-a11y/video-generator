@@ -16,7 +16,8 @@ export async function fetchPendingRows(
   supabase: SupabaseClient,
   filter: MarketingContentFilter = {}
 ): Promise<MarketingContentRow[]> {
-  const { sign, mood, date, limit, force = false } = filter;
+  const { sign, mood, limit, force = false } = filter;
+
   // ── Step 1: collect already-processed IDs ─────────────────────────────────
   let processedIds: number[] = [];
 
@@ -38,7 +39,7 @@ export async function fetchPendingRows(
 
   logger.info("Fetching pending marketing_content rows", {
     alreadyProcessed: processedIds.length,
-    filter: { sign, mood, date, limit, force },
+    filter: { sign, mood, limit, force },
   });
 
   // ── Step 2: query marketing_content excluding processed IDs ───────────────
@@ -55,9 +56,6 @@ export async function fetchPendingRows(
   }
   if (mood) {
     query = query.ilike("mood", mood.trim());
-  }
-  if (date) {
-  query = query.eq("horoscope_date", date.trim());
   }
   if (processedIds.length > 0) {
     query = query.not("id", "in", `(${processedIds.join(",")})`);

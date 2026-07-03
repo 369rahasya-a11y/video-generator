@@ -49,10 +49,6 @@ const argv = yargs(hideBin(process.argv))
     type: "string",
     description: "Filter by mood (e.g. peaceful, ambitious)",
   })
-  .option("date", {
-    type: "string",
-    description: "Filter by horoscope date (YYYY-MM-DD)",
-  })
   .option("force", {
     type: "boolean",
     default: false,
@@ -72,14 +68,12 @@ async function main(): Promise<void> {
   const limit = argv.limit ?? config.defaultBatchLimit;
   const sign = argv.sign;
   const mood = argv.mood;
-  const date = argv.date;
   const force = argv.force;
 
   logger.info("=== Rahasya Video Generation — batch start ===", {
     limit,
     sign: sign ?? "(all)",
     mood: mood ?? "(all)",
-    date: date ?? "(all)",
     force,
   });
 
@@ -87,7 +81,6 @@ async function main(): Promise<void> {
   const rows = await fetchPendingRows(supabase, {
     sign,
     mood,
-    date,
     limit,
     force,
   });
