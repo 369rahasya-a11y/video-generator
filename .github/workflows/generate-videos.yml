@@ -1,16 +1,18 @@
 name: Generate Rahasya Videos
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Triggers
+# Fully autonomous daily pipeline. A brand-new runner can clone this repo and
+# generate + upload the day's videos with zero manual setup: FFmpeg, fonts,
+# and Piper (binary + voice model) are all installed automatically below.
 # ─────────────────────────────────────────────────────────────────────────────
 on:
   schedule:
-    - cron: "0 3 * * *"   # 03:00 UTC daily (after horoscope-generator)
+    - cron: "0 3 * * *"   # 03:00 UTC daily (after horoscope-generator + marketing-ai)
 
   workflow_dispatch:
     inputs:
       limit:
-        description: "Max videos to generate (empty = all pending)"
+        description: "Max videos to generate (empty = all pending for the resolved date)"
         required: false
         default: ""
         type: string
@@ -25,10 +27,18 @@ on:
         default: ""
         type: string
       date:
-        description: "Generate videos for a specific date (YYYY-MM-DD). Leave empty for all pending."
+        description: "Generate videos for a specific date (YYYY-MM-DD). Leave empty to auto-resolve the latest date."
         required: false
         default: ""
         type: string
+      all_dates:
+        description: "Disable date auto-resolution and process any pending date"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
       force:
         description: "Re-process rows that already have a social_videos entry"
         required: false
@@ -45,25 +55,31 @@ concurrency:
   group: rahasya-video-generation
   cancel-in-progress: false
 
+env:
+  # Pinned for reproducibility. Bump deliberately, not silently via "latest".
+  PIPER_VERSION: "v1.2.0"
+  PIPER_ARCH: "amd64"
+  PIPER_VOICE: "en_US-lessac-medium"
+
 jobs:
   generate:
     name: Generate Videos
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
-      # ── Checkout ────────────────────────────────────────────────────────────
+      # ── 1. Checkout ────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── Node.js ─────────────────────────────────────────────────────────────
+      # ── 2. Node.js ────────────────────────────────────────────────────────
       - name: Set up Node.js 24
         uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: "npm"
 
-      # ── System dependencies ─────────────────────────────────────────────────
+      # ── 3. System dependencies: FFmpeg + fonts ───────────────────────────
       # FFmpeg:              video encoding + background PNG generation
       # fonts-dejavu-core:  Unicode-complete fonts for FFmpeg drawtext
       #                     (provides DejaVuSans.ttf and DejaVuSans-Bold.ttf)
@@ -74,74 +90,101 @@ jobs:
           sudo apt-get install -y -q ffmpeg fonts-dejavu-core fonts-freefont-ttf
           echo "--- FFmpeg version ---"
           ffmpeg -version | head -3
+          echo "--- FFprobe version ---"
+          ffprobe -version | head -3
           echo "--- DejaVu fonts ---"
           fc-list | grep -i dejavu | sort
 
-      # ── Node dependencies ────────────────────────────────────────────────────
+      # ── 4. Node dependencies ──────────────────────────────────────────────
       - name: Install Node dependencies
         run: npm ci --no-audit --no-fund
 
-      # ── Optional: download production assets ─────────────────────────────────
-      # Uncomment and adapt to download music tracks from your storage.
-      # The zodiac wheel (assets/wheel/zodiac-wheel.png) is committed to the repo.
-      #
-      # Example — download from S3:
-      #   - name: Download ambient music
-      #     env:
-      #       AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-      #       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      #     run: |
-      #       mkdir -p assets/music
-      #       aws s3 sync s3://your-bucket/rahasya/music/ assets/music/
-      #
-      # Example — download from GitHub releases:
-      #   - name: Download ambient music
-      #     run: |
-      #       mkdir -p assets/music
-      #       curl -L https://github.com/your-org/rahasya-assets/releases/download/v1/ambient01.mp3 \
-      #         -o assets/music/ambient01.mp3
-      #
-      # Without this step the engine uses a synthesised cosmic ambient drone —
-      # the pipeline continues to work and produce complete videos.
+      # ── 5. Cache Piper binary + voice model ──────────────────────────────
+      # Keyed on version/arch/voice so a bump to any of them invalidates the
+      # cache automatically. Saves ~25MB (binary) + ~60MB (voice) of network
+      # transfer on every run after the first.
+      - name: Cache Piper binary + voice model
+        id: piper-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .piper-bin
+            assets/voice
+          key: piper-${{ env.PIPER_VERSION }}-${{ env.PIPER_ARCH }}-${{ env.PIPER_VOICE }}
 
-      # ── TypeScript type check ─────────────────────────────────────────────────
+      # ── 6. Install Piper + download voice model (skips if cache hit and ──
+      #      files are already present — script is idempotent either way) ──
+      - name: Install Piper TTS + voice model
+        env:
+          PIPER_VERSION: ${{ env.PIPER_VERSION }}
+          PIPER_ARCH: ${{ env.PIPER_ARCH }}
+          PIPER_VOICE: ${{ env.PIPER_VOICE }}
+        run: bash scripts/setup-piper.sh
+
+      # ── 7. TypeScript type check ───────────────────────────────────────────
       - name: Type check
         run: npm run typecheck
 
-      # ── Verify zodiac wheel asset ─────────────────────────────────────────────
+      # ── 8. Verify all assets + dependencies before generation starts ──────
+      # The generate command also runs its own in-process preflight check
+      # (FFmpeg/FFprobe/Piper/model/fonts) and fails fast with a clear error,
+      # but we verify the static assets here too so a broken commit fails
+      # at the cheapest possible step.
       - name: Verify assets
         run: |
           echo "Checking zodiac wheel…"
           ls -lh assets/wheel/zodiac-wheel.png
           echo "Checking music directory…"
           ls -lh assets/music/ || echo "(no music files — will use synthesised audio)"
+          echo "Checking Piper binary…"
+          test -x "$PIPER_PATH" && "$PIPER_PATH" --help >/dev/null && echo "OK: $PIPER_PATH"
+          echo "Checking Piper voice model…"
+          ls -lh "$PIPER_MODEL_PATH" "$PIPER_CONFIG_PATH"
 
-      # ── Generate videos ───────────────────────────────────────────────────────
+      # ── 9. Generate videos ─────────────────────────────────────────────────
+      # PIPER_PATH / PIPER_MODEL_PATH / PIPER_CONFIG_PATH were exported into
+      # $GITHUB_ENV by scripts/setup-piper.sh (step 6) and are automatically
+      # available to every subsequent step, including this one.
       - name: Generate videos
         env:
-          SUPABASE_URL:             ${{ secrets.SUPABASE_URL }}
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          SUPABASE_VIDEO_BUCKET:    ${{ vars.SUPABASE_VIDEO_BUCKET || 'social-videos' }}
-          BRAND_NAME:               ${{ vars.BRAND_NAME || 'Discover Rahasya' }}
-          BRAND_URL:                ${{ vars.BRAND_URL || 'discover-rahasya.vercel.app' }}
+          SUPABASE_VIDEO_BUCKET:     ${{ vars.SUPABASE_VIDEO_BUCKET || 'social-videos' }}
+          BRAND_NAME:                ${{ vars.BRAND_NAME || 'Discover Rahasya' }}
+          BRAND_URL:                 ${{ vars.BRAND_URL || 'discover-rahasya.vercel.app' }}
         run: |
           ARGS=""
           if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit=${{ inputs.limit }}"; fi
           if [ -n "${{ inputs.sign }}"  ]; then ARGS="$ARGS --sign=${{ inputs.sign }}";   fi
           if [ -n "${{ inputs.mood }}"  ]; then ARGS="$ARGS --mood=${{ inputs.mood }}";   fi
           if [ -n "${{ inputs.date }}" ]; then ARGS="$ARGS --date=${{ inputs.date }}"; fi
+          if [ "${{ inputs.all_dates }}" = "true" ]; then ARGS="$ARGS --all-dates"; fi
           if [ "${{ inputs.force }}" = "true" ]; then ARGS="$ARGS --force"; fi
 
           echo "Running: npm run generate -- $ARGS"
+          # No --date and no --all-dates means the pipeline auto-resolves the
+          # latest non-NULL horoscope_date itself — this is the default
+          # scheduled-cron path and requires no input at all.
           npm run generate -- $ARGS
 
-      # ── Upload debug artifacts on failure ─────────────────────────────────────
+      # ── 10. Upload debug artifacts on failure ─────────────────────────────
       - name: Upload debug artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: failed-render-debug
+          name: failed-render-debug-${{ github.run_id }}
           path: |
             tmp/
             output/
           retention-days: 3
+          if-no-files-found: ignore
+
+      # ── 11. Clean temporary files after successful completion ────────────
+      # The runner is ephemeral and this is technically redundant, but it
+      # keeps the job's own disk usage bounded during long batches and makes
+      # the "clean up after success" requirement explicit and auditable.
+      - name: Clean temporary files
+        if: success()
+        run: |
+          rm -rf tmp/* output/* 2>/dev/null || true
+          echo "Temporary files cleaned."
