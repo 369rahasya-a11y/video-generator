@@ -12,6 +12,30 @@ import { logger } from "../utils/logger";
  *
  * This repository ONLY reads marketing_content — it never writes to it.
  */
+export async function fetchLatestHoroscopeDate(
+  supabase: SupabaseClient
+): Promise<string> {
+  const { data, error } = await supabase
+    .from("marketing_content")
+    .select("horoscope_date")
+    .not("horoscope_date", "is", null)
+    .order("horoscope_date", { ascending: false })
+    .limit(1);
+
+  if (error) {
+    throw new Error(
+      `Failed to determine latest horoscope_date: ${error.message}`
+    );
+  }
+
+  const latest = data?.[0]?.horoscope_date;
+
+  if (!latest) {
+    throw new Error("No valid horoscope_date found in marketing_content.");
+  }
+
+  return latest;
+}
 export async function fetchPendingRows(
   supabase: SupabaseClient,
   filter: MarketingContentFilter = {}
@@ -46,28 +70,7 @@ export async function fetchPendingRows(
   // Migration 007. Narration and story text come exclusively from the
   // video_story_* fields.
   // Determine latest non-NULL horoscope_date
-let latestDate: string | undefined;
 
-if (!date) {
-  const { data: latestRows, error: latestError } = await supabase
-    .from("marketing_content")
-    .select("horoscope_date")
-    .not("horoscope_date", "is", null)
-    .order("horoscope_date", { ascending: false })
-    .limit(1);
-
-  if (latestError) {
-    throw new Error(
-      `Failed to determine latest horoscope_date: ${latestError.message}`
-    );
-  }
-
-  latestDate = latestRows?.[0]?.horoscope_date;
-
-  if (!latestDate) {
-    throw new Error("No valid horoscope_date found in marketing_content.");
-  }
-}
   let query = supabase
     .from("marketing_content")
     .select(
@@ -85,8 +88,6 @@ if (!date) {
   }
   if (date) {
   query = query.eq("horoscope_date", date.trim());
-  }else {
-  query = query.eq("horoscope_date", latestDate!);
   }
   if (processedIds.length > 0) {
     query = query.not("id", "in", `(${processedIds.join(",")})`);
