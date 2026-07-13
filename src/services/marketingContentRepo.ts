@@ -45,11 +45,35 @@ export async function fetchPendingRows(
   // NOTE: reel_script is intentionally NOT selected — it is deprecated as of
   // Migration 007. Narration and story text come exclusively from the
   // video_story_* fields.
+  // Determine latest non-NULL horoscope_date
+let latestDate: string | undefined;
+
+if (!date) {
+  const { data: latestRows, error: latestError } = await supabase
+    .from("marketing_content")
+    .select("horoscope_date")
+    .not("horoscope_date", "is", null)
+    .order("horoscope_date", { ascending: false })
+    .limit(1);
+
+  if (latestError) {
+    throw new Error(
+      `Failed to determine latest horoscope_date: ${latestError.message}`
+    );
+  }
+
+  latestDate = latestRows?.[0]?.horoscope_date;
+
+  if (!latestDate) {
+    throw new Error("No valid horoscope_date found in marketing_content.");
+  }
+}
   let query = supabase
     .from("marketing_content")
     .select(
       "id, marketing_horoscope_id, sign, mood, card_text, reel_hook, caption, hashtags, created_at, card_hook, horoscope_date, video_story_hook, video_story_relatable_moment, video_story_emotional_realization, video_story_horoscope_connection, video_story_open_ending, video_story_website_cta"
     )
+    .not("horoscope_date", "is", null)
     .order("horoscope_date", { ascending: false })
     .order("created_at", { ascending: true });
 
@@ -61,6 +85,8 @@ export async function fetchPendingRows(
   }
   if (date) {
   query = query.eq("horoscope_date", date.trim());
+  }else {
+  query = query.eq("horoscope_date", latestDate!);
   }
   if (processedIds.length > 0) {
     query = query.not("id", "in", `(${processedIds.join(",")})`);
