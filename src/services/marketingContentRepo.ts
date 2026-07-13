@@ -71,7 +71,7 @@ export async function fetchPendingRows(
   // video_story_* fields.
   // Determine latest non-NULL horoscope_date
 
-  let query = supabase
+  let query: any = supabase
     .from("marketing_content")
     .select(
       "id, marketing_horoscope_id, sign, mood, card_text, reel_hook, caption, hashtags, created_at, card_hook, horoscope_date, video_story_hook, video_story_relatable_moment, video_story_emotional_realization, video_story_horoscope_connection, video_story_open_ending, video_story_website_cta"
