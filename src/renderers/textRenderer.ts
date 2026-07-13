@@ -261,7 +261,7 @@ export function buildFilterComplex(
     );
     parts.push(
       `[${l4}]` +
-      dt(fonts.regular, 44, C.goldDim, textFiles.ctaUrl, "(w-text_w)/2", "h/2+190", s4s, s4e, 0) +
+      dt(fonts.regular, 44, C.goldDim, textFiles.ctaUrl, "(w-text_w)/2", "h/2+220", s4s, s4e, 0) +
       `[vout]`
     );
   }
