@@ -122,7 +122,7 @@ export function loadConfig(): AppConfig {
     brandName: optional("BRAND_NAME", "Discover Rahasya"),
     brandUrl: optional("BRAND_URL", "discover-rahasya.vercel.app"),
 
-    defaultBatchLimit: parseInt(optional("DEFAULT_BATCH_LIMIT", "20"), 10),
+    defaultBatchLimit: parseInt(optional("DEFAULT_BATCH_LIMIT", "24"), 10),
 
     tmpDir,
     outputDir,
