@@ -5,18 +5,27 @@
  * generates an MP4 for each one, uploading to Supabase and recording the
  * result in social_videos.
  *
+ * Default behaviour (zero-argument, cron-friendly):
+ *   1. Run preflight checks (FFmpeg, FFprobe, Piper binary + voice model,
+ *      fonts) and fail fast with a clear error if anything is missing.
+ *   2. Auto-resolve the latest non-NULL horoscope_date in marketing_content
+ *      and process only that day's rows. Legacy rows with a NULL
+ *      horoscope_date are NEVER processed.
+ *
  * CLI flags:
  *   --limit=N           Process at most N rows (default: DEFAULT_BATCH_LIMIT env var)
  *   --sign=aries        Filter by zodiac sign
  *   --mood=peaceful     Filter by mood
+ *   --date=YYYY-MM-DD   Process a specific date instead of auto-resolving "today"
+ *   --all-dates         Escape hatch: disable date auto-resolution, process any pending date
  *   --force             Re-process rows that already have a social_videos entry
  *
  * Examples:
- *   npm run generate
+ *   npm run generate                          # today's batch, auto-resolved
  *   npm run generate -- --limit=1
- *   npm run generate -- --limit=5
  *   npm run generate -- --sign=cancer --mood=ambitious
- *   npm run generate -- --limit=36
+ *   npm run generate -- --date=2026-07-10
+ *   npm run generate -- --all-dates --limit=36
  */
 
 import * as dotenv from "dotenv";
@@ -26,10 +35,11 @@ import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import { loadConfig } from "../config/env";
 import { getSupabaseClient } from "../services/supabase";
-import { fetchPendingRows } from "../services/marketingContentRepo";
+import { fetchPendingRows, fetchLatestHoroscopeDate } from "../services/marketingContentRepo";
 import { uploadVideo } from "../services/storage";
 import { insertSocialVideo, markProcessingStarted } from "../services/socialVideoRepo";
 import { generateVideo } from "../generators/videoGenerator";
+import { runPreflightChecks, PreflightError } from "../utils/preflight";
 import { logger } from "../utils/logger";
 
 // ---------------------------------------------------------------------------
@@ -51,7 +61,12 @@ const argv = yargs(hideBin(process.argv))
   })
   .option("date", {
     type: "string",
-    description: "Filter by horoscope date (YYYY-MM-DD)",
+    description: "Filter by horoscope date (YYYY-MM-DD). Default: auto-resolved to the latest date.",
+  })
+  .option("all-dates", {
+    type: "boolean",
+    default: false,
+    description: "Disable date auto-resolution and process any pending date (escape hatch)",
   })
   .option("force", {
     type: "boolean",
@@ -67,19 +82,45 @@ const argv = yargs(hideBin(process.argv))
 
 async function main(): Promise<void> {
   const config = loadConfig();
+
+  // ── Preflight: fail fast, before touching Supabase or spawning anything ──
+  try {
+    await runPreflightChecks(config);
+  } catch (err) {
+    if (err instanceof PreflightError) {
+      logger.error(err.message);
+    } else {
+      logger.error("Preflight checks crashed unexpectedly", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    process.exit(1);
+  }
+
   const supabase = getSupabaseClient(config);
 
   const limit = argv.limit ?? config.defaultBatchLimit;
   const sign = argv.sign;
   const mood = argv.mood;
-  const date = argv.date;
   const force = argv.force;
+  const allDates = argv.allDates;
+
+  // ── Resolve which date to process ────────────────────────────────────────
+  let date = argv.date;
+  if (!date && !allDates) {
+    date = (await fetchLatestHoroscopeDate(supabase)) ?? undefined;
+    if (!date) {
+      logger.info("No dated marketing_content rows found at all. Nothing to do.");
+      process.exit(0);
+    }
+    logger.info(`Auto-resolved latest horoscope_date: ${date}`);
+  }
 
   logger.info("=== Rahasya Video Generation — batch start ===", {
     limit,
     sign: sign ?? "(all)",
     mood: mood ?? "(all)",
-    date: date ?? "(all)",
+    date: date ?? "(all dates — --all-dates set)",
     force,
   });
 

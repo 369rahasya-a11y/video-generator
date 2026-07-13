@@ -240,3 +240,77 @@ its own narration clip. Its measured duration *is* that scene's duration --
 so the on-screen text for a scene is, by construction, shown for exactly as
 long as its narration plays. This keeps the pipeline simple, fully offline,
 and precisely synchronized without adding a new dependency.
+
+---
+
+## What Changed in V4 (Fully Autonomous Daily Pipeline)
+
+The GitHub Actions workflow now runs end-to-end on a brand-new runner with
+**zero manual setup** — no pre-installed binaries, no manually uploaded
+voice models, no local configuration.
+
+### What was broken
+
+`spawn piper ENOENT` — Piper was never installed in CI. `PIPER_PATH` pointed
+at a binary that simply didn't exist on the runner.
+
+### What's automated now
+
+| Step | How |
+|------|-----|
+| Piper binary | Downloaded from the pinned GitHub release (`scripts/setup-piper.sh`), cached between runs via `actions/cache` |
+| Piper voice model (.onnx + .onnx.json) | Downloaded from Hugging Face (`rhasspy/piper-voices`), cached alongside the binary |
+| `PIPER_PATH` / `PIPER_MODEL_PATH` / `PIPER_CONFIG_PATH` | Exported automatically into `$GITHUB_ENV` by the setup script — no manual env configuration |
+| FFmpeg / FFprobe / fonts | `apt-get install` (unchanged from V1) |
+| Dependency verification | `src/utils/preflight.ts` runs in-process before any row is touched — fails fast with one aggregated, human-readable error listing every missing piece |
+| "Today's" date | Auto-resolved from the latest non-NULL `horoscope_date` in `marketing_content` — no date input needed for the daily cron |
+| Legacy undated rows | Permanently excluded (`horoscope_date IS NOT NULL` is now unconditional in every query) |
+| Debug artifacts | Uploaded only `if: failure()` (unchanged) |
+| Temp file cleanup | Explicit `if: success()` step, in addition to per-video cleanup that already existed |
+
+### New files
+
+```
+scripts/
+  setup-piper.sh          -- idempotent Piper binary + voice model installer
+src/utils/
+  preflight.ts             -- verifies ffmpeg/ffprobe/piper/model/config/fonts
+                               before generation starts; throws PreflightError
+                               with every problem found, not just the first
+  commandCheck.ts           -- spawns a binary to confirm it's actually runnable
+```
+
+### Running it yourself (local dev)
+
+```bash
+npm run setup:piper      # downloads Piper + voice model, prints export lines
+export PIPER_PATH=...    # paste the lines the script prints
+export PIPER_MODEL_PATH=...
+export PIPER_CONFIG_PATH=...
+npm run preview           # or npm run generate
+```
+
+In CI this all happens automatically — `scripts/setup-piper.sh` detects it's
+running inside GitHub Actions (via `$GITHUB_ENV`) and exports the three
+variables for you.
+
+### Batch command changes
+
+```bash
+npm run generate                        # auto-resolves latest horoscope_date
+npm run generate -- --date=2026-07-10   # explicit date
+npm run generate -- --all-dates         # escape hatch: any pending date
+```
+
+If no `--date` is passed and `--all-dates` is not set, the batch command
+queries `marketing_content` for the latest non-NULL `horoscope_date` and
+processes only that day's rows — this is what the scheduled cron run does
+every night, with no input required.
+
+### Pinned versions
+
+Piper version, architecture, and voice are pinned in the workflow's `env:`
+block (`PIPER_VERSION`, `PIPER_ARCH`, `PIPER_VOICE`) rather than tracking
+"latest" — a version bump is a deliberate, visible diff, not a silent
+runtime surprise. Update them there (and bump the cache key follows
+automatically, since it's derived from the same values).

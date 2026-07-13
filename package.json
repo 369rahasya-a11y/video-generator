@@ -11,7 +11,8 @@
     "generate": "ts-node src/commands/generateVideos.ts",
     "test-video": "ts-node src/commands/generateVideos.ts --limit=1",
     "preview": "ts-node src/commands/preview.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "setup:piper": "bash scripts/setup-piper.sh"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

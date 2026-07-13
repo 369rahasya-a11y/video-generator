@@ -27,6 +27,7 @@ import { hideBin } from "yargs/helpers";
 import { AppConfig } from "../config/env";
 import { MarketingContentRow } from "../types/marketingContent";
 import { generateVideo } from "../generators/videoGenerator";
+import { runPreflightChecks, PreflightError } from "../utils/preflight";
 import { logger } from "../utils/logger";
 
 // CLI
@@ -165,6 +166,20 @@ async function main(): Promise<void> {
   });
 
   const config = buildPreviewConfig();
+
+  try {
+    await runPreflightChecks(config);
+  } catch (err) {
+    if (err instanceof PreflightError) {
+      logger.error(err.message);
+    } else {
+      logger.error("Preflight checks crashed unexpectedly", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    process.exit(1);
+  }
+
   const mockRow = buildMockRow(sign, mood);
 
   logger.info("Mock row built", {

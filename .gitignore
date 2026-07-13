@@ -11,6 +11,11 @@ dist/
 tmp/
 output/
 
+# Piper TTS — installed automatically by scripts/setup-piper.sh, never committed
+.piper-bin/
+assets/voice/*.onnx
+assets/voice/*.onnx.json
+
 # Large binary assets — store in S3 / LFS, download in CI
 assets/*.mp4
 assets/*.mp3
