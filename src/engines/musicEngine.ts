@@ -98,8 +98,9 @@ export function selectMusicTrack(
 // ---------------------------------------------------------------------------
 
 /**
- * Real-music filter: fade-in, fade-out, volume reduction.
- * Input label is `[MUSIC_IDX:a]`.
+ * Real-music + narration filter: music ducked under narration, both mixed
+ * to a single output. Narration input label is `[NARR_IDX:a]`, music input
+ * label is `[MUSIC_IDX:a]`.
  */
 export function buildRealMusicFilter(
   musicInputIndex: number,
@@ -113,6 +114,41 @@ export function buildRealMusicFilter(
     `volume=0.65` +
     `[aout]`
   );
+}
+
+/**
+ * Mixes narration (full volume, foreground) with ambient music (ducked,
+ * background) into a single [aout] stream. Both inputs are padded/trimmed
+ * to `totalDuration` by the caller's -t flag, so no explicit trim is needed
+ * here.
+ */
+export function buildNarrationWithMusicFilter(
+  narrationIndex: number,
+  musicInputIndex: number,
+  totalDuration: number
+): string {
+  const fadeOutStart = Math.max(0, totalDuration - 1.5).toFixed(3);
+  return (
+    `[${musicInputIndex}:a]` +
+    `afade=t=in:d=1.5,` +
+    `afade=t=out:st=${fadeOutStart}:d=1.5,` +
+    `volume=0.22` +
+    `[music_a];` +
+    `[${narrationIndex}:a]` +
+    `volume=1.0` +
+    `[narr_a];` +
+    `[narr_a][music_a]amix=inputs=2:duration=first:dropout_transition=2,` +
+    `volume=1.6` +
+    `[aout]`
+  );
+}
+
+/**
+ * Narration-only fallback (no music track available). Narration is the
+ * sole audio output.
+ */
+export function buildNarrationOnlyFilter(narrationIndex: number): string {
+  return `[${narrationIndex}:a]volume=1.0[aout]`;
 }
 
 // ---------------------------------------------------------------------------

@@ -52,38 +52,3 @@ export function maxCharsForFontSize(fontSize: number): number {
   const avgCharWidth = fontSize * 0.57;
   return Math.floor(usableWidth / avgCharWidth);
 }
-
-/**
- * Splits reel_script into two roughly-equal, sentence-aware halves for
- * Scene 3 / Scene 4.
- */
-export function splitScriptIntoTwoParts(reelScript: string): [string, string] {
-  const text = reelScript.trim();
-  if (text.length === 0) return ["", ""];
-
-  // Try to split on the sentence boundary nearest the midpoint.
-  const sentenceEnds: number[] = [];
-  const re = /[.!?]+(\s+|$)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    sentenceEnds.push(m.index + m[0].length);
-  }
-
-  if (sentenceEnds.length >= 2) {
-    const mid = text.length / 2;
-    let best = sentenceEnds[0];
-    for (const pos of sentenceEnds) {
-      if (Math.abs(pos - mid) < Math.abs(best - mid)) best = pos;
-    }
-    const p1 = text.slice(0, best).trim();
-    const p2 = text.slice(best).trim();
-    if (p1.length > 0 && p2.length > 0) return [p1, p2];
-  }
-
-  // Fallback: word midpoint split.
-  const words = text.split(/\s+/);
-  const half = Math.ceil(words.length / 2);
-  const p1 = words.slice(0, half).join(" ");
-  const p2 = words.slice(half).join(" ");
-  return [p1, p2 || p1];
-}

@@ -1,15 +1,18 @@
 /**
- * sceneRenderer.ts — Video Render Orchestrator
+ * sceneRenderer.ts -- Video Render Orchestrator
  *
  * Coordinates one complete video render:
  *   1. Ensure the theme background PNG exists (generated once per theme per session)
  *   2. Write all per-scene content text files to the job temp directory
- *   3. Discover music track (or use synthetic fallback)
- *   4. Build the complete FFmpeg argument list
+ *   3. Discover music track (or use synthetic fallback), mix under narration
+ *   4. Build the complete FFmpeg argument list (video + narration + music)
  *   5. Execute FFmpeg and verify output
  *
- * This module is fully decoupled from Supabase — it only produces a local MP4.
- * The caller (videoGenerator.ts) handles upload and database persistence.
+ * This module is fully decoupled from Supabase -- it only produces a local
+ * MP4. The caller (videoGenerator.ts) handles upload and database
+ * persistence. Narration audio itself is produced upstream by
+ * narrationBuilder.ts (invoked from scenePlanner.ts) -- this module only
+ * consumes plan.narrationPath as an input file.
  */
 
 import * as fs from "fs";
@@ -22,7 +25,11 @@ import { runFFmpeg } from "../utils/ffmpegRunner";
 import { getZodiacInfo } from "../utils/zodiac";
 import { logger } from "../utils/logger";
 import { ensureBackground } from "../engines/backgroundEngine";
-import { selectMusicTrack, buildRealMusicFilter, buildSyntheticAudioFilter } from "../engines/musicEngine";
+import {
+  selectMusicTrack,
+  buildNarrationWithMusicFilter,
+  buildNarrationOnlyFilter,
+} from "../engines/musicEngine";
 
 /** Result returned to the caller after a successful render. */
 export interface RenderedVideo {
@@ -37,8 +44,8 @@ export interface RenderedVideo {
 
 /**
  * Formats the raw mood string into a display label.
- * Single word  → capitalised ("peaceful" → "Peaceful")
- * Multiple (comma/semicolon separated) → "Word · Word · Word"
+ * Single word  -> capitalised ("peaceful" -> "Peaceful")
+ * Multiple (comma/semicolon separated) -> "Word . Word . Word"
  */
 function formatMoodDisplay(mood: string): string {
   return mood
@@ -47,7 +54,7 @@ function formatMoodDisplay(mood: string): string {
     .map((s) => s.trim())
     .filter(Boolean)
     .map((s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase())
-    .join(" · ");
+    .join(" \u00B7 ");
 }
 
 // ---------------------------------------------------------------------------
@@ -70,42 +77,36 @@ function writeSceneTextFiles(
   const { symbol, display } = getZodiacInfo(plan.sign);
   const moodDisplay = formatMoodDisplay(plan.mood);
 
-  // CTA text: combine mainText + optional subText
-  const ctaTextContent = plan.cta.subText
-    ? `${plan.cta.mainText}\n${plan.cta.subText}`
-    : plan.cta.mainText;
+  const sceneText: string[] = plan.scenes.map((scene, i) => {
+    const p = path.join(jobDir, `scene_${i}_${scene.name}.txt`);
+    writeText(p, scene.text);
+    return p;
+  });
 
   const files: SceneTextFiles = {
-    brand1:      path.join(jobDir, "brand1.txt"),
-    brand2:      path.join(jobDir, "brand2.txt"),
-    s1Symbol:    path.join(jobDir, "s1_symbol.txt"),
-    s1Sign:      path.join(jobDir, "s1_sign.txt"),
-    s1Mood:      path.join(jobDir, "s1_mood.txt"),
-    s1Hook:      path.join(jobDir, "s1_hook.txt"),
-    s2Script:    path.join(jobDir, "s2_script.txt"),
-    s3Script:    path.join(jobDir, "s3_script.txt"),
-    s4CtaSymbol: path.join(jobDir, "s4_cta_symbol.txt"),
-    s4CtaText:   path.join(jobDir, "s4_cta_text.txt"),
-    s4Sep:       path.join(jobDir, "s4_sep.txt"),
-    s4Brand:     path.join(jobDir, "s4_brand.txt"),
-    s4Url:       path.join(jobDir, "s4_url.txt"),
+    brand1: path.join(jobDir, "brand1.txt"),
+    brand2: path.join(jobDir, "brand2.txt"),
+    hookSymbol: path.join(jobDir, "hook_symbol.txt"),
+    hookSign: path.join(jobDir, "hook_sign.txt"),
+    hookMood: path.join(jobDir, "hook_mood.txt"),
+    sceneText,
+    ctaSymbol: path.join(jobDir, "cta_symbol.txt"),
+    ctaSep: path.join(jobDir, "cta_sep.txt"),
+    ctaBrand: path.join(jobDir, "cta_brand.txt"),
+    ctaUrl: path.join(jobDir, "cta_url.txt"),
   };
 
-  writeText(files.brand1,      "DISCOVER");
-  writeText(files.brand2,      "RAHASYA");
-  writeText(files.s1Symbol,    symbol);
-  writeText(files.s1Sign,      display.toUpperCase());
-  writeText(files.s1Mood,      moodDisplay);
-  writeText(files.s1Hook,      plan.cardHook);
-  writeText(files.s2Script,    plan.scriptPart1);
-  writeText(files.s3Script,    plan.scriptPart2);
-  writeText(files.s4CtaSymbol, plan.cta.symbol);
-  writeText(files.s4CtaText,   ctaTextContent);
-  writeText(files.s4Sep,       GOLD_RULE);
-  writeText(files.s4Brand,     config.brandName);
-  writeText(files.s4Url,       config.brandUrl);
+  writeText(files.brand1, "DISCOVER");
+  writeText(files.brand2, "RAHASYA");
+  writeText(files.hookSymbol, symbol);
+  writeText(files.hookSign, display.toUpperCase());
+  writeText(files.hookMood, moodDisplay);
+  writeText(files.ctaSymbol, plan.ctaSymbol);
+  writeText(files.ctaSep, GOLD_RULE);
+  writeText(files.ctaBrand, config.brandName);
+  writeText(files.ctaUrl, config.brandUrl);
 
-  logger.debug("Scene text files written", { jobDir, theme: plan.theme.id, cta: plan.cta.id });
+  logger.debug("Scene text files written", { jobDir, theme: plan.theme.id, scenes: plan.scenes.map((s) => s.name) });
 
   return files;
 }
@@ -134,23 +135,28 @@ async function buildFFmpegArgs(
   config: AppConfig
 ): Promise<string[]> {
 
-  // ── 1. Background PNG (generated once per theme, cached) ─────────────────
+  // 1. Background PNG (generated once per theme, cached)
   const bgPath = await ensureBackground(plan.theme, config.tmpDir, config.ffmpegPath);
 
-  // ── 2. Zodiac wheel ───────────────────────────────────────────────────────
+  // 2. Zodiac wheel
   const hasWheel = fileExists(config.wheelPath);
   if (!hasWheel) {
     logger.warn(
-      "assets/wheel/zodiac-wheel.png not found — rendering without wheel overlay. " +
+      "assets/wheel/zodiac-wheel.png not found -- rendering without wheel overlay. " +
       "Ensure the file is committed to the repository."
     );
   }
 
-  // ── 3. Music ──────────────────────────────────────────────────────────────
+  // 3. Music (background, ducked under narration)
   const musicPath = selectMusicTrack(config.musicDir, config.musicTrackPath);
-  const hasMusic  = musicPath !== null && fileExists(musicPath);
+  const hasMusic = musicPath !== null && fileExists(musicPath);
 
-  // ── 4. Build input list (order determines stream indices) ─────────────────
+  // 4. Narration (required -- generated upstream by narrationBuilder)
+  if (!fileExists(plan.narrationPath)) {
+    throw new Error(`Narration audio missing at ${plan.narrationPath}`);
+  }
+
+  // 5. Build input list (order determines stream indices)
   const inputs: string[] = [];
   let nextIdx = 0;
 
@@ -158,40 +164,43 @@ async function buildFFmpegArgs(
   inputs.push("-loop", "1", "-i", bgPath);
   const bgIdx = nextIdx++;
 
-  // Input 1 (optional): zodiac wheel PNG
+  // Input (optional): zodiac wheel PNG
   let wheelIdx = -1;
   if (hasWheel) {
     inputs.push("-loop", "1", "-i", config.wheelPath);
     wheelIdx = nextIdx++;
   }
 
-  // Input 2 or 1 (optional): music
+  // Input: narration track (always present)
+  inputs.push("-i", plan.narrationPath);
+  const narrationIdx = nextIdx++;
+
+  // Input (optional): music, looped to cover the full duration
   let musicIdx = -1;
   if (hasMusic) {
     inputs.push("-stream_loop", "-1", "-i", musicPath!);
     musicIdx = nextIdx++;
   }
 
-  // ── 5. Build filter_complex ───────────────────────────────────────────────
+  // 6. Build filter_complex
   const videoFC = buildFilterComplex(plan, textFiles, fonts, bgIdx, wheelIdx);
 
   const audioFC = hasMusic
-    ? buildRealMusicFilter(musicIdx, plan.totalDuration)
-    : buildSyntheticAudioFilter(plan.totalDuration);
+    ? buildNarrationWithMusicFilter(narrationIdx, musicIdx, plan.totalDuration)
+    : buildNarrationOnlyFilter(narrationIdx);
 
   const filterComplex = `${videoFC};\n${audioFC}`;
 
-  // Log which assets are active
   logger.info("Render assets", {
-    theme:     plan.theme.name,
-    cta:       plan.cta.id,
+    theme: plan.theme.name,
     hasWheel,
     hasMusic,
-    musicFile: hasMusic ? path.basename(musicPath!) : "synthetic",
-    wheelDir:  wheelIdx >= 0 ? "clockwise" : "n/a",
+    musicFile: hasMusic ? path.basename(musicPath!) : "none",
+    scenes: plan.scenes.map((s) => s.name),
+    totalDuration: plan.totalDuration.toFixed(2),
   });
 
-  // ── 6. Assemble full FFmpeg command ───────────────────────────────────────
+  // 7. Assemble full FFmpeg command
   return [
     "-y",
     ...inputs,
@@ -199,17 +208,14 @@ async function buildFFmpegArgs(
     "-map", "[vout]",
     "-map", "[aout]",
     "-t", plan.totalDuration.toFixed(3),
-    // Video — H.264, wide platform compatibility
     "-c:v", "libx264",
     "-crf", "23",
     "-preset", "veryfast",
     "-profile:v", "main",
     "-level", "4.0",
-    // Audio — AAC 128 k
     "-c:a", "aac",
     "-b:a", "128k",
-    "-ar",  "44100",
-    // Pixel format and streaming optimisation
+    "-ar", "44100",
     "-pix_fmt", "yuv420p",
     "-threads", "0",
     "-movflags", "+faststart",
@@ -225,7 +231,7 @@ async function buildFFmpegArgs(
  * Renders one video for the given plan.
  *
  * Returns the local MP4 path and timing information.
- * Throws on FFmpeg failure — the caller handles retries via withRetry().
+ * Throws on FFmpeg failure -- the caller handles retries via withRetry().
  */
 export async function renderVideo(
   plan: VideoPlan,
@@ -235,14 +241,13 @@ export async function renderVideo(
   config: AppConfig
 ): Promise<RenderedVideo> {
   const textFiles = writeSceneTextFiles(jobDir, plan, config);
-  const args      = await buildFFmpegArgs(plan, textFiles, fonts, outputPath, config);
+  const args = await buildFFmpegArgs(plan, textFiles, fonts, outputPath, config);
 
   logger.info("Starting video render", {
-    sign:          plan.sign,
-    mood:          plan.mood,
-    theme:         plan.theme.name,
-    hookFontSize:  plan.hookFontSize,
-    totalDuration: plan.totalDuration,
+    sign: plan.sign,
+    mood: plan.mood,
+    theme: plan.theme.name,
+    totalDuration: plan.totalDuration.toFixed(2),
   });
 
   const { durationSeconds: renderTimeSeconds } = await runFFmpeg(args, config.ffmpegPath);
@@ -256,9 +261,9 @@ export async function renderVideo(
   const fileSizeKB = Math.round(fs.statSync(outputPath).size / 1024);
 
   logger.info("Video render complete", {
-    sign:              plan.sign,
-    mood:              plan.mood,
-    theme:             plan.theme.name,
+    sign: plan.sign,
+    mood: plan.mood,
+    theme: plan.theme.name,
     renderTimeSeconds: renderTimeSeconds.toFixed(1),
     fileSizeKB,
   });

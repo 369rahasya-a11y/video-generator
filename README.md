@@ -150,3 +150,93 @@ Add new themes in `src/config/themes.ts` without touching any renderer code.
 
 12 CTA templates stored in `src/config/ctas.ts`. Add more without touching
 renderer code. One is randomly selected per video.
+
+---
+
+## What Changed in V3 (Marketing AI V2 + Offline Narration)
+
+This upgrade adds offline AI narration and Migration 007 schema support
+**without** redesigning the rendering engine, branding, or visual identity.
+
+| Area | V2 | V3 |
+|------|----|----|
+| Content source | `reel_script` (deprecated) | Six `video_story_*` fields (Migration 007) |
+| Scene count | 4 fixed scenes | 6 scenes, one per story field |
+| Scene timing | Fixed 0-5 / 5-12 / 12-19 / 19-24s | Derived from measured narration audio |
+| Narration | None (music/synthetic drone only) | Offline Piper TTS, per-scene clips |
+| Runtime | Fixed 24s | Targets 30s (+/-1s), never cuts story content |
+| CTA text | 12 hardcoded templates | `video_story_website_cta` (Marketing AI-authored) |
+| CTA symbol | Paired with hardcoded text | Still randomly selected (decorative only) |
+| Subtitles | N/A | Each scene's full text is shown exactly while its narration plays |
+
+### New modules
+
+```
+src/
+  tts/
+    ttsProvider.ts       -- TTSProvider interface (provider abstraction)
+    piperProvider.ts      -- Piper TTS implementation (offline, no API keys)
+  generators/
+    narrationBuilder.ts   -- Synthesizes per-scene narration, measures
+                             duration, computes tempo/pause to hit 30s (+/-1s),
+                             assembles the final narration WAV via ffmpeg.
+  utils/
+    audioProbe.ts          -- ffprobe-based duration measurement
+```
+
+`scenePlanner.ts`, `textRenderer.ts`, and `sceneRenderer.ts` were updated to
+support 6 dynamically-timed scenes and to mix narration (foreground) with
+ambient music (ducked to ~22% under narration). No branding, fonts, colours,
+themes, or CTA symbols were changed.
+
+### Setting up Piper TTS
+
+Piper is a small, fully offline text-to-speech engine. No API key, no
+internet dependency at runtime, and it runs comfortably within a GitHub
+Actions job.
+
+1. Download a Piper release for your platform from
+   https://github.com/rhasspy/piper/releases (Linux/macOS/Windows binaries
+   are all published there).
+2. Download a voice model, e.g. an English voice `.onnx` + `.onnx.json` pair
+   from https://github.com/rhasspy/piper/blob/master/VOICES.md.
+3. Set the following environment variables (or use the defaults, which
+   expect the binary on `PATH` and the model at `assets/voice/voice.onnx`):
+
+```
+PIPER_PATH=/path/to/piper            # or just "piper" if it's on PATH
+PIPER_MODEL_PATH=assets/voice/voice.onnx
+PIPER_CONFIG_PATH=assets/voice/voice.onnx.json   # optional; Piper can auto-resolve
+PIPER_LENGTH_SCALE=1.05              # 1.0 = model default; >1 = slower/calmer
+```
+
+In GitHub Actions (Ubuntu runners), download the Linux Piper binary and the
+voice model as a workflow step before `npm run generate`, and cache both
+between runs to keep the job fast.
+
+### Narration / timing environment variables
+
+```
+TARGET_DURATION_SECONDS=30           # target total video runtime
+TARGET_DURATION_TOLERANCE_SECONDS=1  # acceptable +/- deviation
+BASE_PAUSE_SECONDS=0.45              # baseline pause between story sections
+MIN_PAUSE_SECONDS=0.3
+MAX_PAUSE_SECONDS=0.6
+MIN_TEMPO=0.85                       # narrowest natural speaking-rate adjustment
+MAX_TEMPO=1.18                       # widest natural speaking-rate adjustment
+CTA_MIN_DURATION_SECONDS=3.5         # CTA scene stays visible at least this long
+```
+
+If the narration + pauses can't be brought within tolerance using only
+natural tempo/pause adjustment (i.e. the clamps above are hit), the pipeline
+logs a warning and keeps the full, unedited story rather than trimming any
+content -- exactly as required by the spec.
+
+### Why per-scene narration (not word-level alignment)
+
+Piper does not emit word-level timestamps out of the box. Rather than bolt
+on a separate forced-aligner, each of the 6 story fields is synthesized as
+its own narration clip. Its measured duration *is* that scene's duration --
+so the on-screen text for a scene is, by construction, shown for exactly as
+long as its narration plays. This keeps the pipeline simple, fully offline,
+and precisely synchronized without adding a new dependency.

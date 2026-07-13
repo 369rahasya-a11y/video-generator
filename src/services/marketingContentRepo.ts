@@ -42,10 +42,13 @@ export async function fetchPendingRows(
   });
 
   // ── Step 2: query marketing_content excluding processed IDs ───────────────
+  // NOTE: reel_script is intentionally NOT selected — it is deprecated as of
+  // Migration 007. Narration and story text come exclusively from the
+  // video_story_* fields.
   let query = supabase
     .from("marketing_content")
     .select(
-      "id, marketing_horoscope_id, sign, mood, card_text, reel_hook, reel_script, caption, created_at, card_hook, horoscope_date"
+      "id, marketing_horoscope_id, sign, mood, card_text, reel_hook, caption, hashtags, created_at, card_hook, horoscope_date, video_story_hook, video_story_relatable_moment, video_story_emotional_realization, video_story_horoscope_connection, video_story_open_ending, video_story_website_cta"
     )
     .order("horoscope_date", { ascending: false })
     .order("created_at", { ascending: true });
@@ -74,13 +77,27 @@ export async function fetchPendingRows(
 
   const rows = (data ?? []) as MarketingContentRow[];
 
-  // Guard: ensure reel_hook and reel_script are non-empty
+  // Guard: ensure all six Migration 007 video_story_* fields are present and
+  // non-empty. Fail gracefully (skip + log) rather than crashing the batch.
+  const REQUIRED_STORY_FIELDS: Array<keyof MarketingContentRow> = [
+    "video_story_hook",
+    "video_story_relatable_moment",
+    "video_story_emotional_realization",
+    "video_story_horoscope_connection",
+    "video_story_open_ending",
+    "video_story_website_cta",
+  ];
+
   const valid = rows.filter((row) => {
-    if (!row.reel_hook?.trim() || !row.reel_script?.trim()) {
-      logger.warn("Skipping row with empty reel_hook or reel_script", {
+    const missing = REQUIRED_STORY_FIELDS.filter(
+      (field) => !String(row[field] ?? "").trim()
+    );
+    if (missing.length > 0) {
+      logger.warn("Skipping row with missing Marketing AI V2 story field(s)", {
         id: row.id,
         sign: row.sign,
         mood: row.mood,
+        missingFields: missing,
       });
       return false;
     }

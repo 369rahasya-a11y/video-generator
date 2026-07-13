@@ -57,8 +57,23 @@ export interface AppConfig {
   defaultBatchLimit: number;
 
   // ── Directories ───────────────────────────────────────────────────────────
+  // (see AppConfig fields above; narration/tts fields documented below)
   tmpDir: string;
   outputDir: string;
+
+  piperPath: string;
+  piperModelPath: string;
+  piperConfigPath: string;
+  piperLengthScale: number;
+
+  targetDurationSeconds: number;
+  targetDurationToleranceSeconds: number;
+  basePauseSeconds: number;
+  minPauseSeconds: number;
+  maxPauseSeconds: number;
+  minTempo: number;
+  maxTempo: number;
+  ctaMinDurationSeconds: number;
 }
 
 /**
@@ -111,5 +126,19 @@ export function loadConfig(): AppConfig {
 
     tmpDir,
     outputDir,
+
+    piperPath: optional("PIPER_PATH", "piper"),
+    piperModelPath: optional("PIPER_MODEL_PATH", path.resolve("assets/voice/voice.onnx")),
+    piperConfigPath: optional("PIPER_CONFIG_PATH", ""),
+    piperLengthScale: parseFloat(optional("PIPER_LENGTH_SCALE", "1.05")),
+
+    targetDurationSeconds: parseFloat(optional("TARGET_DURATION_SECONDS", "30")),
+    targetDurationToleranceSeconds: parseFloat(optional("TARGET_DURATION_TOLERANCE_SECONDS", "1")),
+    basePauseSeconds: parseFloat(optional("BASE_PAUSE_SECONDS", "0.45")),
+    minPauseSeconds: parseFloat(optional("MIN_PAUSE_SECONDS", "0.3")),
+    maxPauseSeconds: parseFloat(optional("MAX_PAUSE_SECONDS", "0.6")),
+    minTempo: parseFloat(optional("MIN_TEMPO", "0.85")),
+    maxTempo: parseFloat(optional("MAX_TEMPO", "1.18")),
+    ctaMinDurationSeconds: parseFloat(optional("CTA_MIN_DURATION_SECONDS", "3.5")),
   };
 }

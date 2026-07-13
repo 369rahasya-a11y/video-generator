@@ -5,7 +5,7 @@
  * MarketingContentRow.
  *
  * Flow:
- *   buildVideoPlan → renderVideo → uploadVideo → insertSocialVideo → cleanup
+ *   buildVideoPlan (narration + timing) -> renderVideo -> uploadVideo -> insertSocialVideo -> cleanup
  *
  * The `skipUpload` flag is used by the preview command so you can iterate on
  * fonts/layout/timing without touching Supabase.
@@ -21,12 +21,23 @@ import { resolveFonts } from "../utils/fontResolver";
 import { createJobDir, cleanupDir, buildVideoFilename } from "../utils/tempFiles";
 import { withRetry } from "../utils/retry";
 import { logger } from "../utils/logger";
+import { TTSProvider } from "../tts/ttsProvider";
+import { PiperProvider } from "../tts/piperProvider";
 
-// Lazy-resolved fonts — resolved once per process, shared across all videos.
+// Lazy-resolved fonts -- resolved once per process, shared across all videos.
 let _fonts: ReturnType<typeof resolveFonts> | null = null;
 function getFonts() {
   if (!_fonts) _fonts = resolveFonts();
   return _fonts;
+}
+
+// Lazy-resolved TTS provider -- resolved once per process, shared across all
+// videos. Swapping to a different offline provider later only requires
+// changing this one line (both must implement TTSProvider).
+let _tts: TTSProvider | null = null;
+function getTTSProvider(config: AppConfig): TTSProvider {
+  if (!_tts) _tts = new PiperProvider(config);
+  return _tts;
 }
 
 export interface GenerateOptions {
@@ -54,7 +65,8 @@ export interface GenerateResult {
 /**
  * Generates one video for the given marketing_content row.
  *
- * On error, cleans up temp files and re-throws.
+ * On error, cleans up temp files and re-throws. The caller (generateVideos.ts)
+ * catches this per-row so one failed narration/render never aborts the batch.
  */
 export async function generateVideo(
   row: MarketingContentRow,
@@ -65,20 +77,25 @@ export async function generateVideo(
   const jobDir = createJobDir(config.tmpDir);
 
   try {
-    // ── 1. Plan ──────────────────────────────────────────────────────────────
-    const plan = buildVideoPlan(row);
+    // 1. Plan (builds narration via Piper TTS + derives scene timing from it)
+    const tts = getTTSProvider(config);
+    const plan = await withRetry(
+      () => buildVideoPlan(row, config, jobDir, tts),
+      { retries: 2, baseDelayMs: 1500, label: `narration+plan:${row.sign}:${row.mood}` }
+    );
+
     logger.info("Video plan built", {
       sign: plan.sign,
       mood: plan.mood,
       scenes: plan.scenes.map((s) => ({
         name: s.name,
-        start: s.start,
-        duration: s.duration,
+        start: s.start.toFixed(2),
+        duration: s.duration.toFixed(2),
       })),
-      totalDuration: plan.totalDuration,
+      totalDuration: plan.totalDuration.toFixed(2),
     });
 
-    // ── 2. Render ─────────────────────────────────────────────────────────────
+    // 2. Render
     const fonts = getFonts();
     const filename = buildVideoFilename(row.sign, row.mood);
     const outputPath = path.join(jobDir, filename);
@@ -97,13 +114,13 @@ export async function generateVideo(
         );
       }
 
-      // ── 3. Upload ───────────────────────────────────────────────────────────
+      // 3. Upload
       videoUrl = await withRetry(
         () => uploadFn(outputPath, row.sign, row.mood, row.horoscope_date),
         { retries: 3, baseDelayMs: 1000, label: `upload:${row.sign}:${row.mood}` }
       );
 
-      // ── 4. DB insert ────────────────────────────────────────────────────────
+      // 4. DB insert
       await withRetry(
         () =>
           insertFn(
@@ -122,11 +139,11 @@ export async function generateVideo(
         videoUrl,
       });
 
-      // ── 5. Delete local temp file after successful upload ────────────────
+      // 5. Delete local temp file after successful upload
       try {
         fs.unlinkSync(outputPath);
       } catch {
-        // Non-fatal — temp dir cleanup handles it
+        // Non-fatal -- temp dir cleanup handles it
       }
     } else {
       // Preview mode: move to output/ with a recognisable name

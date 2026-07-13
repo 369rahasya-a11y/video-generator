@@ -1,22 +1,26 @@
 /**
  * scene.ts — Core type definitions for the video rendering pipeline.
  *
- * VideoPlan is the single source of truth passed from scenePlanner → renderer.
- * It now includes the selected theme, CTA, font sizes, and wheel rotation
- * parameters so the renderer is fully declarative and testable.
+ * VideoPlan is the single source of truth passed from scenePlanner -> renderer.
+ *
+ * V2 change: scenes are no longer fixed 24s windows. There are now six
+ * scenes -- one per Marketing AI V2 video_story_* field -- whose start/duration
+ * are derived from measured narration audio (see narrationBuilder.ts), so the
+ * total runtime targets 30s (+/-1s) while preserving every word of the story.
  */
 
 import { VideoTheme } from "../config/themes";
-import { CtaContent } from "../config/ctas";
+import { StorySceneName } from "../generators/narrationBuilder";
 
-/**
- * A single scene's position on the global 24-second timeline.
- * All four scenes always occupy fixed windows totalling exactly 24 s.
- */
+/** A single scene's position on the (variable-length) timeline. */
 export interface SceneTiming {
-  name: "hook" | "script_part1" | "script_part2" | "cta";
+  name: StorySceneName;
   start: number;
   duration: number;
+  /** Word-wrapped display text for this scene. */
+  text: string;
+  /** Computed font size (px) for this scene's text block. */
+  fontSize: number;
 }
 
 /**
@@ -24,37 +28,29 @@ export interface SceneTiming {
  * Produced by scenePlanner.ts, consumed by sceneRenderer.ts.
  */
 export interface VideoPlan {
-  // ── Content ────────────────────────────────────────────────────────────────
+  // Content
   sign: string;
   mood: string;
 
-  /** card_hook text (word-wrapped lines separated by \n). Falls back to reel_hook. */
-  cardHook: string;
-  /** Computed font size (px) for the hook text block */
-  hookFontSize: number;
-
-  /** First half of reel_script — sentence-aware split, word-wrapped */
-  scriptPart1: string;
-  scriptPart1FontSize: number;
-
-  /** Second half of reel_script — sentence-aware split, word-wrapped */
-  scriptPart2: string;
-  scriptPart2FontSize: number;
-
-  // ── Timeline ───────────────────────────────────────────────────────────────
+  // Timeline: hook, relatable_moment, emotional_realization,
+  // horoscope_connection, open_ending, cta -- in order.
   scenes: SceneTiming[];
 
-  /** Fixed at 24.000 seconds */
+  /** Sum of all scene durations. Targets 30.0s (+/-1s). */
   totalDuration: number;
 
-  // ── Visual ─────────────────────────────────────────────────────────────────
+  // Narration
+  /** Absolute path to the final assembled narration WAV (padded to totalDuration). */
+  narrationPath: string;
+
+  // Visual
   /** The premium dark theme selected for this video */
   theme: VideoTheme;
 
-  /** The CTA block selected for the final scene */
-  cta: CtaContent;
+  /** Decorative CTA symbol (visual identity only -- CTA text comes from video_story_website_cta). */
+  ctaSymbol: string;
 
-  // ── Zodiac Wheel ───────────────────────────────────────────────────────────
+  // Zodiac Wheel
   /** true = clockwise, false = counter-clockwise */
   wheelClockwise: boolean;
   /** Starting rotation angle in radians (randomised per video) */
