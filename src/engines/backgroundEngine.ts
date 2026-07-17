@@ -1,17 +1,18 @@
 /**
  * backgroundEngine.ts
  *
- * Generates a premium dark radial-gradient background PNG for each theme
- * using FFmpeg's vignette filter. The PNG is generated once per theme per
- * Node.js process and cached in-memory + on disk under tmp/bg_cache/.
+ * Resolves the background image to use for one video.
  *
- * Re-using a static PNG as the video source is far more efficient than
- * computing a gradient per-pixel per-frame inside the main filtergraph.
+ * PRIMARY PATH (production asset pack present):
+ *   Returns a real production background image from assets/backgrounds/,
+ *   chosen via assetManager's fixed deterministic sequential rotation keyed
+ *   on the video's stable row id (plan.videoNumber). Never randomised.
  *
- * The generated PNG has:
- *   • A rich centre colour specific to each theme
- *   • A smooth dark vignette that fades to near-black at the edges
- *   • Dimensions exactly matching the video canvas (1080 × 1920)
+ * FALLBACK PATH (asset pack missing/empty -- non-fatal):
+ *   Preserves the original behaviour exactly: a premium dark radial-gradient
+ *   PNG generated per-theme via FFmpeg's vignette filter, cached in-memory +
+ *   on disk under tmp/bg_cache/. This guarantees rendering never crashes
+ *   because of a missing asset pack.
  */
 
 import * as fs from "fs";
@@ -19,19 +20,55 @@ import * as path from "path";
 import { VideoTheme } from "../config/themes";
 import { runFFmpeg } from "../utils/ffmpegRunner";
 import { logger } from "../utils/logger";
+import { getBackgroundForVideoNumber } from "../assets/assetManager";
 
-// Module-level cache: themeId → absolute path of the generated PNG
+// Module-level cache: themeId → absolute path of the generated PNG (fallback only)
 const bgCache = new Map<string, string>();
 
 /**
- * Returns the path to a ready-to-use background PNG for the given theme.
- * Generates and caches it on first call; returns the cached path thereafter.
+ * Returns the path to a ready-to-use background image for this video.
  *
- * @param theme      The selected video theme
- * @param tmpDir     Root tmp directory (e.g. "tmp")
- * @param ffmpegPath Path / name of the ffmpeg binary
+ * @param videoNumber    Deterministic 1-based video number (plan.videoNumber)
+ *                       used to key fixed sequential background rotation.
+ * @param backgroundsDir Directory containing the production background pack.
+ * @param theme          The selected video theme (used only by the
+ *                       procedural-gradient fallback, and for accent
+ *                       colour / wheel opacity elsewhere -- unrelated to
+ *                       background image selection now).
+ * @param tmpDir         Root tmp directory (e.g. "tmp"), used by the fallback.
+ * @param ffmpegPath     Path / name of the ffmpeg binary, used by the fallback.
  */
 export async function ensureBackground(
+  videoNumber: number,
+  backgroundsDir: string,
+  theme: VideoTheme,
+  tmpDir: string,
+  ffmpegPath: string
+): Promise<string> {
+  // Primary path: deterministic sequential rotation over real production assets.
+  const assetPath = getBackgroundForVideoNumber(videoNumber, backgroundsDir);
+  if (assetPath) {
+    logger.info(`Background resolved via sequential rotation`, {
+      videoNumber,
+      background: path.basename(assetPath),
+    });
+    return assetPath;
+  }
+
+  // Fallback path: asset pack missing/empty -- never crash, use the
+  // pre-existing procedural gradient generator exactly as before.
+  logger.warn(
+    `No background assets available in "${backgroundsDir}" -- ` +
+    `falling back to procedural gradient background for theme "${theme.id}".`
+  );
+  return ensureProceduralBackground(theme, tmpDir, ffmpegPath);
+}
+
+// ---------------------------------------------------------------------------
+// Legacy procedural generator -- preserved as the fallback only
+// ---------------------------------------------------------------------------
+
+async function ensureProceduralBackground(
   theme: VideoTheme,
   tmpDir: string,
   ffmpegPath: string

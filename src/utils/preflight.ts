@@ -17,6 +17,7 @@ import * as fs from "fs";
 import { AppConfig } from "../config/env";
 import { checkCommand } from "./commandCheck";
 import { resolveFonts } from "./fontResolver";
+import { validateAssets } from "../assets/assetManager";
 import { logger } from "./logger";
 
 export class PreflightError extends Error {
@@ -110,6 +111,9 @@ export async function runPreflightChecks(config: AppConfig): Promise<void> {
       `render without the wheel overlay. This is non-fatal.`
     );
   }
+
+  // ── Production backgrounds / zodiac artwork (non-fatal -- graceful fallbacks) ──
+  validateAssets(config.backgroundsDir, config.zodiacDir);
 
   if (problems.length > 0) {
     throw new PreflightError(problems);

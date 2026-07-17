@@ -44,6 +44,14 @@ export interface VideoPlan {
   narrationPath: string;
 
   // Visual
+  /**
+   * Deterministic 1-based video number used ONLY to key fixed sequential
+   * background rotation (assetManager.getBackgroundForVideoNumber). Sourced
+   * from the stable marketing_content row id, so the same content row always
+   * maps to the same background -- no randomness, no persisted counter.
+   */
+  videoNumber: number;
+
   /** The premium dark theme selected for this video */
   theme: VideoTheme;
 

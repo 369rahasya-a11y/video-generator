@@ -72,6 +72,12 @@ function enableBetween(start: number, end: number): string {
   return `between(t,${start.toFixed(4)},${end.toFixed(4)})`;
 }
 
+/** Same fade-duration clamping logic as fadeAlpha(), shared so image overlays
+ *  fade in/out over the same effective window as text does. */
+function effectiveFadeDuration(start: number, end: number, fade = FADE): number {
+  return Math.min(fade, Math.max(0.05, (end - start) / 2 - 0.01));
+}
+
 // Drawtext helper
 
 function dt(
@@ -119,7 +125,8 @@ export function buildFilterComplex(
   textFiles: SceneTextFiles,
   fonts: ResolvedFonts,
   bgIndex: number,
-  wheelIndex: number
+  wheelIndex: number,
+  zodiacArtIndex: number
 ): string {
   const { scenes, theme, wheelClockwise, wheelStartAngle, totalDuration } = plan;
 
@@ -132,10 +139,17 @@ export function buildFilterComplex(
   const accent = theme.accentColor;
   const parts: string[] = [];
 
-  // Part 1: Scale background PNG into a 30fps 1080x1920 stream
+  // Part 1: Scale background into a 30fps 1080x1920 stream.
+  // Production background photos are not pre-cropped to the 1080x1920
+  // canvas, so scale to COVER (force_original_aspect_ratio=increase) and
+  // centre-crop the overflow -- this fills the frame with zero distortion
+  // instead of stretching the source image out of proportion. (The legacy
+  // procedural gradient fallback is already exactly 1080x1920, so this is a
+  // no-op crop for that path.)
   parts.push(
     `[${bgIndex}:v]` +
-    `scale=1080:1920:force_original_aspect_ratio=disable,` +
+    `scale=1080:1920:force_original_aspect_ratio=increase,` +
+    `crop=1080:1920,` +
     `fps=30,` +
     `setsar=1` +
     `[base]`
@@ -188,12 +202,33 @@ export function buildFilterComplex(
     const h1s = hookScene.start;
     const h1e = h1s + hookScene.duration;
 
+    // Zodiac symbol: real per-sign artwork (primary path) with the original
+    // drawtext-rendered glyph preserved as a fallback if that sign's artwork
+    // is missing (asset validation happens upstream in sceneRenderer.ts).
     const l1 = nextLabel();
-    parts.push(
-      `[${lastLabel}]` +
-      dt(fonts.bold, 200, C.goldBright, textFiles.hookSymbol, "(w-text_w)/2", "h*0.16", h1s, h1e, 0) +
-      `[${l1}]`
-    );
+    if (zodiacArtIndex >= 0) {
+      const fd = effectiveFadeDuration(h1s, h1e);
+      const fadeOutStart = h1e - fd;
+      parts.push(
+        `[${zodiacArtIndex}:v]` +
+        `format=rgba,` +
+        `scale=-1:220,` +
+        `fade=t=in:st=${h1s.toFixed(4)}:d=${fd.toFixed(4)}:alpha=1,` +
+        `fade=t=out:st=${fadeOutStart.toFixed(4)}:d=${fd.toFixed(4)}:alpha=1` +
+        `[zodiac_art]`
+      );
+      parts.push(
+        `[${lastLabel}][zodiac_art]` +
+        `overlay=x=(W-w)/2:y=H*0.16:enable='${enableBetween(h1s, h1e)}'` +
+        `[${l1}]`
+      );
+    } else {
+      parts.push(
+        `[${lastLabel}]` +
+        dt(fonts.bold, 200, C.goldBright, textFiles.hookSymbol, "(w-text_w)/2", "h*0.16", h1s, h1e, 0) +
+        `[${l1}]`
+      );
+    }
     const l2 = nextLabel();
     parts.push(
       `[${l1}]` +

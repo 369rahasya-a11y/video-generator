@@ -127,6 +127,8 @@ function buildPreviewConfig(): AppConfig {
     ffprobePath: process.env.FFPROBE_PATH ?? "ffprobe",
 
     wheelPath: path.resolve(process.env.WHEEL_PATH ?? "assets/wheel/zodiac-wheel.png"),
+    backgroundsDir: path.resolve(process.env.BACKGROUNDS_DIR ?? "assets/backgrounds"),
+    zodiacDir: path.resolve(process.env.ZODIAC_DIR ?? "assets/zodiac"),
     musicDir: path.resolve(process.env.MUSIC_DIR ?? "assets/music"),
     musicTrackPath: process.env.MUSIC_TRACK_PATH ?? "",
 

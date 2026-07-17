@@ -40,6 +40,10 @@ export interface AppConfig {
   // ── Assets ────────────────────────────────────────────────────────────────
   /** Path to zodiac wheel PNG overlay (assets/wheel/zodiac-wheel.png) */
   wheelPath: string;
+  /** Directory of production background images, used in fixed sequential rotation */
+  backgroundsDir: string;
+  /** Directory of per-sign zodiac artwork PNGs (assets/zodiac/<sign>.png) */
+  zodiacDir: string;
   /** Directory that contains ambient .mp3/.ogg music tracks */
   musicDir: string;
   /**
@@ -116,6 +120,8 @@ export function loadConfig(): AppConfig {
     wheelPath: path.resolve(
       optional("WHEEL_PATH", "assets/wheel/zodiac-wheel.png")
     ),
+    backgroundsDir: path.resolve(optional("BACKGROUNDS_DIR", "assets/backgrounds")),
+    zodiacDir: path.resolve(optional("ZODIAC_DIR", "assets/zodiac")),
     musicDir: path.resolve(optional("MUSIC_DIR", "assets/music")),
     musicTrackPath: optional("MUSIC_TRACK_PATH", ""),
 

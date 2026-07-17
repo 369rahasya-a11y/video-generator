@@ -109,6 +109,10 @@ export async function buildVideoPlan(
     totalDuration: narration.totalDuration,
     narrationPath: narration.narrationPath,
 
+    // Stable marketing_content row id -- used only to key deterministic
+    // sequential background rotation. Never randomised.
+    videoNumber: row.id,
+
     theme: selectRandomTheme(),
     ctaSymbol: selectRandomCtaSymbol(),
 

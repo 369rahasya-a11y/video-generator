@@ -23,6 +23,7 @@ import { buildFilterComplex, SceneTextFiles, GOLD_RULE } from "./textRenderer";
 import { ResolvedFonts } from "../utils/fontResolver";
 import { runFFmpeg } from "../utils/ffmpegRunner";
 import { getZodiacInfo } from "../utils/zodiac";
+import { getZodiacArtPath } from "../assets/assetManager";
 import { logger } from "../utils/logger";
 import { ensureBackground } from "../engines/backgroundEngine";
 import {
@@ -135,15 +136,35 @@ async function buildFFmpegArgs(
   config: AppConfig
 ): Promise<string[]> {
 
-  // 1. Background PNG (generated once per theme, cached)
-  const bgPath = await ensureBackground(plan.theme, config.tmpDir, config.ffmpegPath);
+  // 1. Background image (deterministic sequential rotation over the
+  //    production asset pack; falls back to the procedural gradient if the
+  //    pack is missing/empty -- see backgroundEngine.ts)
+  const bgPath = await ensureBackground(
+    plan.videoNumber,
+    config.backgroundsDir,
+    plan.theme,
+    config.tmpDir,
+    config.ffmpegPath
+  );
 
-  // 2. Zodiac wheel
+  // 2. Zodiac wheel (generic rotating wheel overlay -- unchanged)
   const hasWheel = fileExists(config.wheelPath);
   if (!hasWheel) {
     logger.warn(
       "assets/wheel/zodiac-wheel.png not found -- rendering without wheel overlay. " +
       "Ensure the file is committed to the repository."
+    );
+  }
+
+  // 2b. Zodiac sign artwork (real per-sign PNG, replaces the programmatically
+  //     drawn symbol). Falls back to the generated symbol if this sign's
+  //     artwork is missing -- rendering must never crash on a missing asset.
+  const zodiacArtPath = getZodiacArtPath(plan.sign, config.zodiacDir);
+  const hasZodiacArt = zodiacArtPath !== null && fileExists(zodiacArtPath);
+  if (!hasZodiacArt) {
+    logger.warn(
+      `Zodiac artwork not found for sign "${plan.sign}" in "${config.zodiacDir}" -- ` +
+      `falling back to the generated symbol for this video.`
     );
   }
 
@@ -171,6 +192,13 @@ async function buildFFmpegArgs(
     wheelIdx = nextIdx++;
   }
 
+  // Input (optional): per-sign zodiac artwork PNG
+  let zodiacArtIdx = -1;
+  if (hasZodiacArt) {
+    inputs.push("-loop", "1", "-i", zodiacArtPath!);
+    zodiacArtIdx = nextIdx++;
+  }
+
   // Input: narration track (always present)
   inputs.push("-i", plan.narrationPath);
   const narrationIdx = nextIdx++;
@@ -183,7 +211,7 @@ async function buildFFmpegArgs(
   }
 
   // 6. Build filter_complex
-  const videoFC = buildFilterComplex(plan, textFiles, fonts, bgIdx, wheelIdx);
+  const videoFC = buildFilterComplex(plan, textFiles, fonts, bgIdx, wheelIdx, zodiacArtIdx);
 
   const audioFC = hasMusic
     ? buildNarrationWithMusicFilter(narrationIdx, musicIdx, plan.totalDuration)
@@ -193,7 +221,11 @@ async function buildFFmpegArgs(
 
   logger.info("Render assets", {
     theme: plan.theme.name,
+    videoNumber: plan.videoNumber,
+    background: path.basename(bgPath),
     hasWheel,
+    hasZodiacArt,
+    zodiacSign: plan.sign,
     hasMusic,
     musicFile: hasMusic ? path.basename(musicPath!) : "none",
     scenes: plan.scenes.map((s) => s.name),
